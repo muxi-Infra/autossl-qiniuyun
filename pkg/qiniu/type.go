@@ -39,14 +39,23 @@ type GetSSLCertListReq struct {
 	Limit int `json:"limit"`
 }
 
+type GetSSLCertByIDResp struct {
+	Name     string `json:"name"`
+	NotAfter int64  `json:"not_after"`
+	Pri      string `json:"pri"`
+	Ca       string `json:"ca"`
+}
+
 type GetSSLCertListResp struct {
 	Certs []Cert `json:"certs"`
 }
-
+type GetSSLCertById struct {
+	Certs []Cert `json:"certs"`
+}
 type Cert struct {
 	CertId   string `json:"certid"`
 	Name     string `json:"name"`
-	NotAfter int    `json:"not_after"`
+	NotAfter int64  `json:"not_after"`
 }
 
 type ForceHTTPSReq struct {
@@ -62,7 +71,7 @@ type UPSSLCertResp struct {
 //内部通用函数
 
 // 发送 HTTP 请求，自动处理参数方式
-func (c *QiniuClient) newReq(method, path string, data interface{}) ([]byte, error) {
+func (c *QiniuClient) newReq(method, path string, data any) ([]byte, error) {
 	var body io.Reader
 	urlParams := url.Values{}
 
@@ -122,7 +131,7 @@ func (c *QiniuClient) newReq(method, path string, data interface{}) ([]byte, err
 	return result, nil
 }
 
-func (c *QiniuClient) structToMap(data interface{}) (map[string]string, error) {
+func (c *QiniuClient) structToMap(data any) (map[string]string, error) {
 	result := make(map[string]string)
 
 	v := reflect.ValueOf(data)

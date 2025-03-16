@@ -1,9 +1,12 @@
 package config
 
 import (
+	"bytes"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 	"log"
+	"os"
 	"reflect"
 	"sync"
 	"time"
@@ -42,7 +45,8 @@ type SSLConf struct {
 		AccessKeyID     string `yaml:"accessKeyID"`
 		AccessKeySecret string `yaml:"accessKeySecret"`
 	} `yaml:"aliyun"`
-	Changed bool // 记录是否发生变更
+	DB      string `yaml:"db"`
+	Changed bool   // 记录是否发生变更
 }
 
 type CronConf struct {
@@ -144,53 +148,71 @@ func ReloadConfig() {
 	}
 }
 
-// GetEmailConf 获取 Email 配置
-func GetEmailConf() EmailConf {
+// WriteConfigToFile 将配置写入 YAML 文件
+func WriteConfigToFile(cronConf *CronConf) error {
 	mu.Lock()
 	defer mu.Unlock()
-	return EmailConfig
+
+	// 将 CronConf 结构体转换为 YAML
+	data, err := yaml.Marshal(cronConf)
+	if err != nil {
+		log.Println("序列化 YAML 失败:", err)
+		return err
+	}
+
+	// 获取配置文件路径
+	configPath := viper.ConfigFileUsed()
+
+	// 写入 YAML 文件
+	err = os.WriteFile(configPath, data, 0644)
+	if err != nil {
+		log.Println("写入配置文件失败:", err)
+		return err
+	}
+
+	// 让 Viper 重新加载配置
+	err = viper.ReadInConfig()
+	if err != nil {
+		log.Println("重新加载 Viper 配置失败:", err)
+		return err
+	}
+
+	// 重新加载全局配置变量
+	ReloadConfig()
+
+	log.Println("配置文件更新成功！")
+	return nil
 }
 
-// GetQiniuConf 获取 Qiniu 配置
-func GetQiniuConf() QiniuConf {
-	mu.Lock()
-	defer mu.Unlock()
-	return QiniuConfig
+// LoadConfigFromYAML 解析 YAML 字符串到结构体
+func LoadConfigFromYAML(yamlData string) (*CronConf, error) {
+	var newConfig CronConf
+
+	decoder := yaml.NewDecoder(bytes.NewReader([]byte(yamlData)))
+	err := decoder.Decode(&newConfig)
+	if err != nil {
+		log.Println("解析 YAML 失败:", err)
+		return nil, err
+	}
+
+	return &newConfig, nil
 }
 
-// GetSSLConf 获取 SSL 配置
-func GetSSLConf() SSLConf {
-	mu.Lock()
-	defer mu.Unlock()
-	return SSLConfig
-}
-
-// SetEmailConf 修改 Email 配置
-func SetEmailConf(newConf EmailConf) error {
-	mu.Lock()
-	defer mu.Unlock()
-	EmailConfig = newConf
-	viper.Set("email", newConf) // 更新 Viper 中的值
-	return viper.WriteConfig()  // 写回文件
-}
-
-// SetQiniuConf 修改 Qiniu 配置
-func SetQiniuConf(newConf QiniuConf) error {
+// GetAllConfigsAsYAML 获取所有配置并转换为 YAML 字符串
+func GetAllConfigsAsYAML() (string, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	QiniuConfig = newConf
-	viper.Set("qiniu", newConf) // 更新 Viper 中的值
-	return viper.WriteConfig()  // 写回文件
-}
+	config := GetCronConfig()
 
-// SetSSLConf 修改 SSL 配置
-func SetSSLConf(newConf SSLConf) error {
-	mu.Lock()
-	defer mu.Unlock()
-	SSLConfig = newConf
-	viper.Set("ssl", newConf)
-	return viper.WriteConfig()
+	// 序列化成 YAML 格式
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		log.Println("序列化 YAML 失败:", err)
+		return "", err
+	}
+
+	return string(data), nil
 }
 
 // GetCronConfig 获取 Cron 配置

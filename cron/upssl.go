@@ -7,13 +7,10 @@ import (
 	"github.com/muxi-Infra/autossl-qiniuyun/pkg/email"
 	"github.com/muxi-Infra/autossl-qiniuyun/pkg/qiniu"
 	"github.com/muxi-Infra/autossl-qiniuyun/pkg/ssl"
+	"golang.org/x/net/publicsuffix"
+	"gorm.io/gorm"
 	"time"
 )
-
-type DomainDAO interface {
-	GetDomainList() ([]dao.Domain, error)
-	SaveDomainList(domainList []dao.Domain) error
-}
 
 type QiniuSSL struct {
 }
@@ -31,19 +28,27 @@ func (q *QiniuSSL) Start() {
 		//初始化配置
 		q.initConfig()
 
-		//获取要申领的域名列表
-		domains, err := q.getFilteredDomains()
+		//按照父域名对域名进行分组
+		domainGroups, err := q.getDomainGroups()
 		if err != nil {
-			return
+			//发送邮件
+			err := emailClient.SendEmail([]string{receiver}, "七牛云自动报警服务", fmt.Sprintf("域名列表分组失败!:%s", err.Error()), "", nil)
+			if err != nil {
+				return
+			}
+			continue
 		}
 
 		//存储到失败的map里面
-		var failMap = make(map[int][]DomainWithCert)
-		for _, domain := range domains {
-			code, err := StartStrategy(StartAll, &domain)
+		var failMap = make(map[int]*DomainWithCert)
+		for k, v := range domainGroups {
+			var d = DomainWithCert{
+				Domains:      v,
+				FatherDomain: k,
+			}
+			code, err := StartStrategy(StartAll, &d)
 			if err != nil {
-				failMap[code] = append(failMap[code], domain)
-				return
+				failMap[code] = &d
 			}
 		}
 
@@ -51,23 +56,23 @@ func (q *QiniuSSL) Start() {
 
 		//遍历failMap
 		for k, v := range failMap {
-			for _, domain := range v {
-				_, err := StartStrategy(k, &domain)
-				if err != nil {
-					errs = append(errs, ErrWithDomain{
-						err:    fmt.Errorf(":%v", err),
-						domain: domain.Name,
-					})
-				}
+			_, err := StartStrategy(k, v)
+			if err != nil {
+				errs = append(errs, ErrWithDomain{
+					err:     err,
+					Domains: v.Domains,
+				})
 			}
+
 		}
 
 		//如果有错误则收集并发送最终报文
+
 		if len(errs) > 0 {
 			//发送邮件
 			err := emailClient.SendEmail([]string{receiver}, "七牛云自动报警服务", "", q.generateErrorReportHTML(errs), nil)
 			if err != nil {
-				return
+				// TODO 如果邮件也失败了的话应当输出到日志系统里
 			}
 		}
 
@@ -78,8 +83,10 @@ func (q *QiniuSSL) initConfig() {
 
 	//获取所有相关配置
 	cron := config.GetCronConfig()
+
 	//停止一段时间防止被识别为攻击
-	//time.Sleep(cron.Duration)
+	time.Sleep(cron.Duration)
+
 	//当出现更改时才进行修改
 	if cron.QiniuConf.Changed {
 		qiniuClient = qiniu.NewQiniuClient(cron.AccessKey, cron.SecretKey)
@@ -90,8 +97,15 @@ func (q *QiniuSSL) initConfig() {
 	}
 
 	if cron.SSLConf.Changed {
-		provider := ssl.NewProvider(ssl.Aliyun, cron.Aliyun.AccessKeyID, cron.Aliyun.AccessKeySecret, "")
 		var err error
+		sslDAO, err = dao.NewSSLDao(cron.DB)
+		if err != nil {
+			// TODO
+			return
+		}
+
+		provider := ssl.NewProvider(ssl.Aliyun, cron.Aliyun.AccessKeyID, cron.Aliyun.AccessKeySecret, "")
+
 		cmClient, err = ssl.NewCertMagicClient(cron.Email, cron.SSLPath, provider)
 		if err != nil {
 			// TODO
@@ -99,55 +113,77 @@ func (q *QiniuSSL) initConfig() {
 		}
 		receiver = cron.Receiver
 	}
+	now = time.Now().Unix()
 
 }
 
-func (q *QiniuSSL) getFilteredDomains() ([]DomainWithCert, error) {
+const (
+	ExpirationThreshold = 30 // 证书过期阈值（天）
+	SecondsPerDay       = 24 * 60 * 60
+)
 
+// getDomainGroups 获取所有域名，并按父域名分组
+func (q *QiniuSSL) getDomainGroups() (map[string][]string, error) {
+	domainGroups := make(map[string][]string)
 	domainList, err := qiniuClient.GetDomainList()
 	if err != nil {
-		return []DomainWithCert{}, nil
+		return nil, fmt.Errorf("failed to get domain list: %w", err)
 	}
 
-	//获取当前存储的所有的证书
-	certList, err := qiniuClient.GETSSLCertList()
-	if err != nil {
-		return []DomainWithCert{}, nil
-	}
-
-	//去除所有的当前并不需要进行操作的
-
-	// 证书映射表 (域名 -> 证书)
-	certMap := make(map[string]qiniu.Cert)
-	for _, cert := range certList.Certs {
-		certMap[cert.Name] = cert
-	}
-
-	// 计算 30 天后的时间
-	cutoffTime := time.Now().Add(30 * 24 * time.Hour).Unix()
-
-	// 筛选符合条件的域名
-	var filteredDomains []DomainWithCert
+	// 按父域名分组
 	for _, domain := range domainList.Domains {
-		cert, exists := certMap[domain.Name]
-		if exists {
-			// 仅保留过期时间 <= 30 天的证书
-			if cert.NotAfter <= int(cutoffTime) {
-				filteredDomains = append(filteredDomains, DomainWithCert{
-					Name:      domain.Name,
-					OldCertID: cert.CertId,
-				})
-			}
-		} else {
-			filteredDomains = append(filteredDomains, DomainWithCert{
-				Name: domain.Name,
-			})
+		parentDomain, err := getParentDomain(domain.Name)
+		if err != nil {
+			fmt.Printf("无法解析域名 %s: %v\n", domain.Name, err)
+			continue
+		}
+		domainGroups[parentDomain] = append(domainGroups[parentDomain], domain.Name)
+	}
+
+	// 从需要处理的表格中删除所有已经在符合条件的证书下的域名
+	for parentDomain, domains := range domainGroups {
+		// 获取已存储的域名及证书过期时间
+		certTime, storedDomains, err := sslDAO.GetDomains(parentDomain)
+		switch err {
+		case nil:
+		case gorm.ErrRecordNotFound:
+			continue
+		default:
+			return nil, err
+		}
+
+		now := time.Now().Unix()
+		// 如果证书未过期，则去除已存储的域名
+		if now-certTime < ExpirationThreshold*SecondsPerDay {
+			domainGroups[parentDomain] = filterUnstoredDomains(domains, storedDomains)
 		}
 	}
 
-	return filteredDomains, nil
+	return domainGroups, nil
 }
 
+// filterUnstoredDomains 过滤掉已经存储的域名
+func filterUnstoredDomains(allDomains, storedDomains []string) []string {
+	storedMap := make(map[string]struct{})
+	for _, d := range storedDomains {
+		storedMap[d] = struct{}{}
+	}
+
+	var result []string
+	for _, d := range allDomains {
+		if _, exists := storedMap[d]; !exists {
+			result = append(result, d)
+		}
+	}
+	return result
+}
+
+// getParentDomain 获取父级域名
+func getParentDomain(domain string) (string, error) {
+	return publicsuffix.EffectiveTLDPlusOne(domain)
+}
+
+// 生成错误报告的html
 func (q *QiniuSSL) generateErrorReportHTML(errs []ErrWithDomain) string {
 	html := `
 		<!DOCTYPE html>
@@ -172,7 +208,7 @@ func (q *QiniuSSL) generateErrorReportHTML(errs []ErrWithDomain) string {
 				<h2>失败域名报告</h2>
 				<table>
 					<tr>
-						<th>域名</th>
+						<th>域名列表</th>
 						<th>错误信息</th>
 					</tr>
 	`
@@ -182,7 +218,7 @@ func (q *QiniuSSL) generateErrorReportHTML(errs []ErrWithDomain) string {
 			<tr>
 				<td>%s</td>
 				<td>%s</td>
-			</tr>`, e.domain, e.err.Error())
+			</tr>`, fmt.Sprintf("%v", e.Domains), e.err.Error())
 	}
 
 	html += `
@@ -197,43 +233,15 @@ func (q *QiniuSSL) generateErrorReportHTML(errs []ErrWithDomain) string {
 }
 
 type ErrWithDomain struct {
-	err    error
-	domain string
-}
-type DomainWithCert struct {
-	Name      string
-	OldCertID string
-	CertID    string
-	KeyPEM    string
-	CertPEM   string
+	err     error
+	Domains []string
 }
 
-//Let's Encrypt 相关限流规则
-//单个注册账号的证书请求限制
-//
-//50 个证书/每 3 小时（对于不同的主域名，不管多少子域名）。
-//例如，你在 3 小时内尝试为 51 个不同的域名申请证书，第 51 个请求会被拒绝。
-//同一主域名的证书限制
-//
-//50 个证书/每周（同一个主域名及其子域名的总和）。
-//例如，example.com 及其 *.example.com 和 sub.example.com 在 7 天内只能申请 50 个证书。
-//注册账号创建限制
-//
-//10 个账户/每 3 小时（基于相同 IP 地址）。
-//如果你试图短时间内创建多个 Let's Encrypt 账户，也可能被限制。
-//重复证书申请限制
-//
-//5 次相同证书/每周（即相同的域名列表）。
-//例如，如果你反复申请 a.example.com 和 b.example.com，最多可以在 7 天内成功 5 次。
-//解决方案
-//使用通配符证书（Wildcard）
-//
-//申请 *.example.com 而不是单独为 a.example.com、b.example.com 申请多个证书。
-//需要使用 DNS-01 方式验证域名。
-//合并多个域名到一个证书
-//
-//Let's Encrypt 允许一个证书包含多个域名（SAN）。
-//例如，一个证书可以同时包含 example1.com、example2.com、example3.com，避免单独申请多个证书。
-//分批申请
-//
-//计划性地分散申请请求，避免在短时间内触发限制。
+type DomainWithCert struct {
+	Domains      []string //域名列表
+	FatherDomain string   //父域名
+	OldCertId    string   //旧证书的id
+	CertId       string   //证书id
+	CertPEM      string   //证书的内容
+	KeyPEM       string   //证书的内容
+}

@@ -19,7 +19,7 @@ func NewCertMagicClient(email, path string, provider Provider) (*CertMagicClient
 
 	// 配置 CertMagic
 	certmagic.DefaultACME.Email = email
-	certmagic.DefaultACME.CA = certmagic.LetsEncryptStagingCA
+	//certmagic.DefaultACME.CA = certmagic.LetsEncryptStagingCA
 	certmagic.DefaultACME.DNS01Solver = &certmagic.DNS01Solver{
 		DNSManager: certmagic.DNSManager{
 			DNSProvider: dnsProvider,

@@ -1,22 +1,15 @@
 package router
 
-import "github.com/gin-gonic/gin"
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/muxi-Infra/autossl-qiniuyun/controller"
+	"github.com/muxi-Infra/autossl-qiniuyun/service"
+)
 
-func InitRouter() *gin.Engine {
+func InitRouter(s *service.Service) *gin.Engine {
 	g := gin.Default()
 	api := g.Group("/api/v1")
-
-	// 提供PUT方法进行外部热更新配置
-	api.PUT()
-
-	// 添加禁止自动申请黑名单, 注意做域名检查
-	api.POST()
-
-	// 从禁止自动申请黑名单中移除
-	api.DELETE()
-
-	// 查询当前的黑名单
-	api.GET()
-
+	conf := controller.NewController(s)
+	conf.RegisterRoutes(api)
 	return g
 }
