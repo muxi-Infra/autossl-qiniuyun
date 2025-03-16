@@ -64,6 +64,22 @@ func (c *QiniuClient) GETSSLCertList() (GetSSLCertListResp, error) {
 	return resp, nil
 }
 
+// 使用certId获取ssl证书
+func (c *QiniuClient) GETSSLCertById(certId string) (GetSSLCertByIDResp, error) {
+	var resp GetSSLCertByIDResp
+	//如果存在则不会报错,这里没有去查错误码 TODO 使用错误码进行精确对应
+	data, err := c.newReq(http.MethodGet, "/sslcert/"+certId, nil)
+	if err != nil {
+		return GetSSLCertByIDResp{}, err
+	}
+	err = json.Unmarshal(data, &resp)
+	if err != nil {
+		return GetSSLCertByIDResp{}, err
+
+	}
+	return resp, nil
+}
+
 // 删除证书
 func (c *QiniuClient) RemoveSSLCert(certId string) error {
 	_, err := c.newReq(http.MethodPost, "/sslcert/"+certId, nil)

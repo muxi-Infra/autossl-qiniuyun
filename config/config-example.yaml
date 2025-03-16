@@ -1,0 +1,24 @@
+# 配置文件支持热更新
+#用于发邮件做邮件报警
+email:
+  username: "your-email@xxx.com"
+  password: "password"
+  sender: "your-email@xxx.com"
+  receiver: "your-receiver-email@xxx.com"
+  smtpPort: "xxx"
+  smtpHost: "smtp.xxxx" #
+
+qiniu:
+  accessKey: your-accessKey
+  secretKey: your-secretKey
+
+ssl:
+  duration: 300s # 5分钟一次
+  sslPath : "./data/clientMagic"
+  email : "your-email@xxx.com"
+  aliyun:
+    accessKeyID: your-aliyun-accessKey
+    accessKeySecret: your-aliyun-secretKey
+  db : "./data/sqlite/ssl.db"
+
+
