@@ -2,10 +2,11 @@ package dao
 
 import (
 	"fmt"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 	"os"
 	"path/filepath"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 // SSLDao 负责 SSL 表的数据库操作
@@ -31,11 +32,6 @@ func NewSSLDao(path string) (*SSLDao, error) {
 	}
 
 	return &SSLDao{db: db}, nil
-}
-
-// CreateSSL 创建 SSL 证书记录
-func (dao *SSLDao) CreateSSL(ssl *SSL) error {
-	return dao.db.Create(&ssl).Error
 }
 
 // GetSSLByID 通过 certId 获取 SSL 证书
@@ -94,37 +90,16 @@ func (dao *SSLDao) GetDomains(domainName string) (int64, []string, error) {
 	return ssl.NotAfter.Unix(), domainNames, nil
 }
 
-// UpdateSSL 更新 SSL 证书的域名
-func (dao *SSLDao) UpdateSSL(certID string, newDomains []string) error {
-	var ssl SSL
-	var err error
-	tx := dao.db.Begin()
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		} else {
-			tx.Commit()
-		}
-	}()
+func (dao *SSLDao) SaveSSL(ssl *SSL) error {
 
-	err = tx.Where("cert_id = ?", certID).First(&ssl).Error
-	if err != nil {
-
-		return err
-	}
-
-	// 删除旧的域名记录
-	err = tx.Where("ssl_id = ?", ssl.ID).Delete(&Domain{}).Error
+	err := dao.DeleteSSL(ssl.CertID)
 	if err != nil {
 		return err
 	}
 
-	// 添加新的域名记录
-	for _, domain := range newDomains {
-		err = tx.Create(&Domain{Name: domain, SSLID: ssl.ID}).Error
-		if err != nil {
-			return err
-		}
+	err = dao.db.Create(ssl).Error
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -133,8 +108,11 @@ func (dao *SSLDao) UpdateSSL(certID string, newDomains []string) error {
 // DeleteSSL 硬删除 SSL 证书及关联域名
 func (dao *SSLDao) DeleteSSL(certID string) error {
 	var ssl SSL
-	if err := dao.db.Unscoped().Where("cert_id = ?", certID).First(&ssl).Error; err != nil {
+	if err := dao.db.Unscoped().Where("cert_id = ?", certID).Find(&ssl).Error; err != nil {
 		return err
+	}
+	if ssl.ID == 0 {
+		return nil
 	}
 
 	// 直接硬删除关联的域名

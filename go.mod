@@ -11,6 +11,7 @@ require (
 	github.com/libdns/tencentcloud v1.2.0
 	github.com/nacos-group/nacos-sdk-go v1.1.6
 	github.com/qiniu/go-sdk/v7 v7.25.2
+	github.com/samber/lo v1.53.0
 	github.com/spf13/viper v1.19.0
 	gorm.io/driver/sqlite v1.5.7
 	gorm.io/gorm v1.25.12

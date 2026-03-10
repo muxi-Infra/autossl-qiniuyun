@@ -2,6 +2,7 @@ package ssl
 
 import (
 	"context"
+
 	"github.com/caddyserver/certmagic"
 )
 
@@ -24,7 +25,10 @@ func NewCertMagicClient(email, path string, provider Provider) (*CertMagicClient
 			DNSProvider: dnsProvider,
 		},
 	}
-
+	//更改默认的路径
+	certmagic.Default.Storage = &certmagic.FileStorage{
+		Path: path,
+	}
 	// 创建 CertMagic 配置
 	cm := certmagic.NewDefault()
 	cm.Storage = &certmagic.FileStorage{Path: path}
@@ -36,14 +40,15 @@ type CertMagicClient struct {
 	cm *certmagic.Config
 }
 
-// 获取证书
+// 强制获取证书（不走缓存）
 func (c *CertMagicClient) ObtainCert(ctx context.Context, domain string) (string, string, error) {
 
-	err := c.cm.ObtainCertSync(ctx, domain)
+	err := c.cm.RenewCertSync(ctx, domain, false) // false 表示不进入预留的过期检查逻辑
 	if err != nil {
 		return "", "", err
 	}
 
+	// 获取最新申请到的证书（此时缓存已更新）
 	cert, err := c.cm.CacheManagedCertificate(ctx, domain)
 	if err != nil {
 		return "", "", err

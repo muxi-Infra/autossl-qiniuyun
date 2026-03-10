@@ -5,15 +5,17 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"log"
+	"strings"
+	"time"
+
 	"github.com/muxi-Infra/autossl-qiniuyun/config"
 	"github.com/muxi-Infra/autossl-qiniuyun/dao"
 	"github.com/muxi-Infra/autossl-qiniuyun/pkg/email"
 	"github.com/muxi-Infra/autossl-qiniuyun/pkg/qiniu"
 	"github.com/muxi-Infra/autossl-qiniuyun/pkg/ssl"
+	"github.com/samber/lo"
 	"gorm.io/gorm"
-	"log"
-	"strings"
-	"time"
 )
 
 const (
@@ -129,7 +131,7 @@ func (q *QiniuSSL) startStrategy(ctx context.Context, fatherDomain string, domai
 
 	// 如果查询不到直接获取最新的
 	if sslCredit.ID == 0 {
-		sslCredit, err = q.getSSLCredit(ctx, fatherDomain, domains)
+		sslCredit, err = q.obtainSSLCredit(ctx, fatherDomain)
 		if err != nil {
 			return err
 		}
@@ -142,7 +144,7 @@ func (q *QiniuSSL) startStrategy(ctx context.Context, fatherDomain string, domai
 		if err != nil {
 			return fmt.Errorf("certID:%s ,删除证书失败:%w", sslCredit.CertID, err)
 		}
-		sslCredit, err = q.getSSLCredit(ctx, fatherDomain, domains)
+		sslCredit, err = q.obtainSSLCredit(ctx, fatherDomain)
 		if err != nil {
 			return err
 		}
@@ -161,27 +163,39 @@ func (q *QiniuSSL) startStrategy(ctx context.Context, fatherDomain string, domai
 		if err != nil {
 			return fmt.Errorf("certID:%s ,删除证书失败:%w", sslCredit.CertID, err)
 		}
-		sslCredit, err = q.getSSLCredit(ctx, fatherDomain, domains)
+		sslCredit, err = q.obtainSSLCredit(ctx, fatherDomain)
 		if err != nil {
 			return err
 		}
 	}
 
+	var successDomains []dao.Domain
 	// 强制开启各个域名的HTTPS
 	for _, domain := range domains {
 		err := q.qiniuClient.ForceHTTPS(domain, sslCredit.CertID)
 		if err != nil {
-			return fmt.Errorf("domian:%s, certID:%s, 启用证书失败:%w", domain, sslCredit.CertID, err)
+			return fmt.Errorf("domain:%s, certID:%s, 启用证书失败:%w", domain, sslCredit.CertID, err)
 		}
+		successDomains = append(successDomains, dao.Domain{Name: domain})
 
 		//防止被七牛云限流
 		time.Sleep(5 * time.Second)
 	}
 
+	// 获取去重后的结果并保存
+	sslCredit.Domains = lo.UniqBy(append(sslCredit.Domains, successDomains...), func(d dao.Domain) string {
+		return d.Name
+	})
+
+	err = q.sslDAO.SaveSSL(sslCredit)
+	if err != nil {
+		return fmt.Errorf("domain:%s, certID:%s, 保存或更新证书失败:%w", sslCredit.DomainName, sslCredit.CertID, err)
+	}
+
 	return nil
 }
 
-func (q *QiniuSSL) getSSLCredit(ctx context.Context, fatherDomain string, domains []string) (*dao.SSL, error) {
+func (q *QiniuSSL) obtainSSLCredit(ctx context.Context, fatherDomain string) (*dao.SSL, error) {
 	var sslCredit *dao.SSL
 	// 尝试获取证书
 	certPEM, keyPEM, err := q.cmClient.ObtainCert(ctx, "*."+fatherDomain)
@@ -206,7 +220,7 @@ func (q *QiniuSSL) getSSLCredit(ctx context.Context, fatherDomain string, domain
 		return nil, fmt.Errorf("keyPEM:%s ,certPEM:%s ,Domain:%s,上传证书失败:%w", keyPEM, certPEM, fatherDomain, err)
 	}
 
-	// 构建数据模型
+	// 构建数据模型,注意此时是没有存入任何的子域名的
 	sslCredit = &dao.SSL{
 		DomainName: fatherDomain,
 		CertID:     resp.CertID,
@@ -214,15 +228,7 @@ func (q *QiniuSSL) getSSLCredit(ctx context.Context, fatherDomain string, domain
 		KeyPEM:     keyPEM,
 		NotAfter:   cert.NotAfter,
 	}
-	for _, domain := range domains {
-		sslCredit.Domains = append(sslCredit.Domains, dao.Domain{Name: domain})
-	}
 
-	// 写入数据库
-	err = q.sslDAO.CreateSSL(sslCredit)
-	if err != nil {
-		return nil, fmt.Errorf("certID:%s ,存储证书失败:%w", sslCredit.CertID, err)
-	}
 	return sslCredit, nil
 }
 
