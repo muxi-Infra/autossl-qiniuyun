@@ -41,23 +41,18 @@ type CertMagicClient struct {
 }
 
 // 强制获取证书（不走缓存）
-func (c *CertMagicClient) ObtainCert(ctx context.Context, domain string) (string, string, error) {
+func (c *CertMagicClient) ObtainCert(ctx context.Context, domains ...string) (string, string, error) {
 
-	err := c.cm.RenewCertSync(ctx, domain, false) // false 表示不进入预留的过期检查逻辑
+	err := c.cm.ManageSync(ctx, domains) // false 表示不进入预留的过期检查逻辑
 	if err != nil {
 		return "", "", err
 	}
 
 	// 获取最新申请到的证书（此时缓存已更新）
-	cert, err := c.cm.CacheManagedCertificate(ctx, domain)
+	cert, err := c.cm.CacheManagedCertificate(ctx, domains[0])
 	if err != nil {
 		return "", "", err
 	}
 
-	certPEM, keyPEM, err := c.convertCertToPEM(cert.Certificate)
-	if err != nil {
-		return "", "", err
-	}
-
-	return certPEM, keyPEM, nil
+	return c.convertCertToPEM(cert.Certificate)
 }

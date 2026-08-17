@@ -198,7 +198,7 @@ func (q *QiniuSSL) startStrategy(ctx context.Context, fatherDomain string, domai
 func (q *QiniuSSL) obtainSSLCredit(ctx context.Context, fatherDomain string) (*dao.SSL, error) {
 	var sslCredit *dao.SSL
 	// 尝试获取证书
-	certPEM, keyPEM, err := q.cmClient.ObtainCert(ctx, "*."+fatherDomain)
+	certPEM, keyPEM, err := q.cmClient.ObtainCert(ctx, fatherDomain, "*."+fatherDomain)
 	if err != nil {
 		return nil, fmt.Errorf("域名:%s ,获取证书失败:%w", "*."+fatherDomain, err)
 	}
@@ -302,11 +302,14 @@ func getParentDomain(domain string) (string, error) {
 
 	// 拆分域名
 	parts := strings.Split(domain, ".")
-	// 如果域名部分少于两段，说明已经是顶级域名了
-	if len(parts) < 2 {
-		return "", fmt.Errorf("no parent domain for %s", domain)
+
+	if len(parts) == 4 {
+		return domain, nil
 	}
 
-	// 组合剩余部分返回
-	return strings.Join(parts[1:], "."), nil
+	if len(parts) == 5 {
+		return strings.Join(parts[1:], "."), nil
+	}
+
+	return "", fmt.Errorf("unsupported domain: %s", domain)
 }
