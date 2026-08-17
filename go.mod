@@ -13,6 +13,7 @@ require (
 	github.com/qiniu/go-sdk/v7 v7.25.2
 	github.com/samber/lo v1.53.0
 	github.com/spf13/viper v1.19.0
+	golang.org/x/net v0.37.0
 	gorm.io/driver/sqlite v1.5.7
 	gorm.io/gorm v1.25.12
 )
@@ -55,7 +56,6 @@ require (
 	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
 	golang.org/x/mod v0.24.0 // indirect
-	golang.org/x/net v0.37.0 // indirect
 	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/text v0.23.0 // indirect

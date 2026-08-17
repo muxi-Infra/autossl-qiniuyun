@@ -84,11 +84,78 @@ type ForceHTTPSReq struct {
 	Http2Enable bool   `json:"http2Enable"`
 }
 
+// GetDomainInfoResp 域名详情，只保留判断 HTTPS 配置所需的字段
+// 文档：https://developer.qiniu.com/fusion/4246/the-domain-name
+type GetDomainInfoResp struct {
+	Code           int    `json:"code"`
+	Error          string `json:"error"`
+	Name           string `json:"name"`
+	Protocol       string `json:"protocol"`       // http / https
+	OperatingState string `json:"operatingState"` // success / processing / failed
+	OperationType  string `json:"operationType"`
+	HTTPS          struct {
+		CertID      string `json:"certId"`
+		ForceHttps  bool   `json:"forceHttps"`
+		Http2Enable bool   `json:"http2Enable"`
+	} `json:"https"`
+}
+
 type UPSSLCertResp struct {
+	Code   int    `json:"code"`
+	Error  string `json:"error"`
 	CertID string `json:"certid"`
 }
 
 //内部通用函数
+
+// ErrCertNotFound 七牛云上找不到该证书（被手动删除等）
+var ErrCertNotFound = errors.New("证书在七牛云上不存在")
+
+// APIError 七牛云返回的非 2xx 响应，调用方可以用 errors.As 精确区分"证书不存在"与"接口临时故障"
+type APIError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	//响应体可能带上传时提交的证书内容，只保留前 256 字节，避免私钥进日志和报警邮件
+	body := e.Body
+	if len(body) > 256 {
+		body = body[:256] + "...(truncated)"
+	}
+	return fmt.Sprintf("七牛云接口失败 %s %s: status=%d body=%s", e.Method, e.Path, e.StatusCode, body)
+}
+
+// ClientError 4xx，表示请求本身有问题（参数非法、资源不存在），重试也不会成功
+func (e *APIError) ClientError() bool {
+	return e.StatusCode >= http.StatusBadRequest && e.StatusCode < http.StatusInternalServerError
+}
+
+// bizResp 七牛云部分接口在 HTTP 200 的同时用 body 里的 code/error 表达失败
+type bizResp struct {
+	Code  int    `json:"code"`
+	Error string `json:"error"`
+}
+
+// checkBizError 解析业务错误码。
+// 注意七牛云成功时也可能返回 {"code":200,"error":"success"}，所以只认非 0 且非 200 的 code，
+// 不能直接拿 error 字段是否为空来判断。
+func checkBizError(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	var resp bizResp
+	if err := json.Unmarshal(data, &resp); err != nil {
+		//成功响应可能是空体或非对象，解析不了就不当作失败
+		return nil
+	}
+	if resp.Code != 0 && resp.Code != http.StatusOK {
+		return fmt.Errorf("七牛云返回业务错误: code=%d error=%s", resp.Code, resp.Error)
+	}
+	return nil
+}
 
 // 发送 HTTP 请求，自动处理参数方式
 func (c *QiniuClient) newReq(method, path string, data any) ([]byte, error) {
@@ -141,11 +208,19 @@ func (c *QiniuClient) newReq(method, path string, data any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	//必须关闭，否则 keep-alive 连接无法归还连接池，长跑会耗尽 fd
+	defer resp.Body.Close()
 
 	//处理结果并转化为[]byte
 	result, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
+	}
+
+	//七牛云的错误必须显式暴露：以前不看状态码，失败会被当成成功，
+	//导致"证书没绑上却记录成功"，且之后永远不再重试
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, &APIError{Method: method, Path: path, StatusCode: resp.StatusCode, Body: string(result)}
 	}
 
 	return result, nil

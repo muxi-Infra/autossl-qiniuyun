@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -90,19 +91,51 @@ func (dao *SSLDao) GetDomains(domainName string) (int64, []string, error) {
 	return ssl.NotAfter.Unix(), domainNames, nil
 }
 
+// SaveSSL 覆盖式保存证书及其绑定的域名。
+// Domain.Name 是全局唯一键，域名从旧证书迁移到新证书时必须先清掉历史绑定，否则 Create 会撞唯一键。
 func (dao *SSLDao) SaveSSL(ssl *SSL) error {
+	return dao.db.Transaction(func(tx *gorm.DB) error {
+		var old SSL
+		if err := tx.Unscoped().Where("cert_id = ?", ssl.CertID).Find(&old).Error; err != nil {
+			return err
+		}
+		if old.ID != 0 {
+			if err := tx.Unscoped().Where("ssl_id = ?", old.ID).Delete(&Domain{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Unscoped().Delete(&old).Error; err != nil {
+				return err
+			}
+		}
 
-	err := dao.DeleteSSL(ssl.CertID)
-	if err != nil {
-		return err
+		// 清理这些域名挂在其它证书下的历史记录
+		if names := domainNames(ssl.Domains); len(names) > 0 {
+			if err := tx.Unscoped().Where("name IN ?", names).Delete(&Domain{}).Error; err != nil {
+				return err
+			}
+		}
+
+		// 主键与时间戳交给 gorm 生成，避免带着旧 ID 显式插入
+		ssl.ID = 0
+		ssl.CreatedAt = time.Time{}
+		ssl.UpdatedAt = time.Time{}
+		for i := range ssl.Domains {
+			ssl.Domains[i].ID = 0
+			ssl.Domains[i].SSLID = 0
+			ssl.Domains[i].CreatedAt = time.Time{}
+			ssl.Domains[i].UpdatedAt = time.Time{}
+		}
+
+		return tx.Create(ssl).Error
+	})
+}
+
+func domainNames(domains []Domain) []string {
+	names := make([]string, 0, len(domains))
+	for _, d := range domains {
+		names = append(names, d.Name)
 	}
-
-	err = dao.db.Create(ssl).Error
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return names
 }
 
 // DeleteSSL 硬删除 SSL 证书及关联域名

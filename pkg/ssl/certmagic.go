@@ -2,6 +2,7 @@ package ssl
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/caddyserver/certmagic"
 )
@@ -40,18 +41,25 @@ type CertMagicClient struct {
 	cm *certmagic.Config
 }
 
-// 强制获取证书（不走缓存）
+// ObtainCert 获取 domain 的证书 PEM。
+// 顺序：本地没有就申请 -> 接近过期才续期 -> 从存储载入。
+// 这样重复调用不会浪费 ACME 额度（Let's Encrypt 对同一组域名每周只允许 5 张重复证书），
+// 同时首次申请也不会像以前那样因为直接 Renew 找不到已有证书而失败。
 func (c *CertMagicClient) ObtainCert(ctx context.Context, domain string) (string, string, error) {
-
-	err := c.cm.RenewCertSync(ctx, domain, false) // false 表示不进入预留的过期检查逻辑
-	if err != nil {
-		return "", "", err
+	// 本地存储已有该证书时是 no-op
+	if err := c.cm.ObtainCertSync(ctx, domain); err != nil {
+		return "", "", fmt.Errorf("申请证书失败: %w", err)
 	}
 
-	// 获取最新申请到的证书（此时缓存已更新）
+	// force=false：只有进入续期窗口才会真正向 CA 发起请求
+	if err := c.cm.RenewCertSync(ctx, domain, false); err != nil {
+		return "", "", fmt.Errorf("续期证书失败: %w", err)
+	}
+
+	// 从存储载入最新证书（Renew 不会更新内存缓存，这里读的是存储）
 	cert, err := c.cm.CacheManagedCertificate(ctx, domain)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("加载证书失败: %w", err)
 	}
 
 	certPEM, keyPEM, err := c.convertCertToPEM(cert.Certificate)

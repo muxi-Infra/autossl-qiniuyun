@@ -38,6 +38,10 @@ type SSLConf struct {
 		AccessKeySecret string `yaml:"accessKeySecret"`
 	} `yaml:"aliyun"`
 	DB string `yaml:"db"`
+	// ForceHTTPS 开启后七牛云会把 http 请求 301 到 https，默认关闭
+	ForceHTTPS bool `yaml:"forceHTTPS"`
+	// HTTP2 是否开启 http2，默认关闭
+	HTTP2 bool `yaml:"http2"`
 }
 
 type Conf struct {
