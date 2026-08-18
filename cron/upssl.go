@@ -372,6 +372,11 @@ func (q *QiniuSSL) getDomainGroups() (map[string][]string, error) {
 	}
 
 	for _, domain := range domainList.Domains {
+		//对象存储等其他类型的域名不在 fusion CDN 接口下，强行调用会被七牛云以
+		//"非法的域名类型"(code=400093)拒绝，整轮拉成告警
+		if domain.Product != "cdn" {
+			continue
+		}
 		subject, err := certSubject(domain.Name)
 		if err != nil {
 			log.Printf("跳过无法解析的域名 %s: %v", domain.Name, err)
