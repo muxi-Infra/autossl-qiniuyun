@@ -26,7 +26,8 @@ type GetDomainResp struct {
 type Domain struct {
 	Name     string `json:"name"`     //域名
 	CreateAt string `json:"createAt"` // 域名创建时间，格式:RFC3339
-	Product  string `json:"product"`  // "cdn" 或对象存储等，只有 cdn 才能 sslize/httpsconf
+	Product  string `json:"product"`  // cdn / dcdn
+	Type     string `json:"type"`     // normal / pan，只有 normal 才能 sslize/httpsconf
 }
 
 type UPSSLCertReq struct {

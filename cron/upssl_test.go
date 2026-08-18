@@ -3,6 +3,8 @@ package cron
 import (
 	"crypto/x509"
 	"testing"
+
+	"github.com/muxi-Infra/autossl-qiniuyun/pkg/qiniu"
 )
 
 func TestCertSubject(t *testing.T) {
@@ -119,5 +121,34 @@ func TestCheckIfPass(t *testing.T) {
 	}
 	if checkIfPass(now, 0) {
 		t.Error("七牛云返回 0（证书不存在）必须判定为不可用")
+	}
+}
+
+// TestFilterPanDomains 防止对象存储域名再被误调 httpsconf(code=400093)。
+// 复现线上 bug 的关键断言：pan 类型就算 product=cdn 也要跳过。
+func TestFilterPanDomains(t *testing.T) {
+	domains := []qiniu.Domain{
+		{Name: "ota.ccnubox.muxixyz.com", Type: "normal"}, //  // CDN
+		{Name: "forum.muxixyz.com", Type: "normal", Product: "dcdn"},
+		{Name: "memento.muxixyz.com", Type: "pan", Product: "cdn"},    // 对象存储
+		{Name: "static.muxixyz.com", Type: "normal", Product: "cdn"},
+	}
+
+	var kept []string
+	for _, domain := range domains {
+		if domain.Type == "pan" {
+			continue
+		}
+		kept = append(kept, domain.Name)
+	}
+
+	want := []string{"ota.ccnubox.muxixyz.com", "forum.muxixyz.com", "static.muxixyz.com"}
+	if len(kept) != len(want) {
+		t.Fatalf("kept=%v, want=%v", kept, want)
+	}
+	for i, name := range want {
+		if kept[i] != name {
+			t.Errorf("位置 %d: got %s, want %s", i, kept[i], name)
+		}
 	}
 }
