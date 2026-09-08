@@ -31,6 +31,8 @@ const (
 	protocolHTTP        = "http"
 	protocolHTTPS       = "https"
 	operatingProcessing = "processing"
+	domainTypeNormal    = "normal"
+	domainTypeWildcard  = "wildcard"
 )
 
 type QiniuSSL struct {
@@ -365,16 +367,21 @@ func checkIfPass(now, t int64) bool {
 
 // getDomainGroups 获取所有域名，并按证书主体名分组
 func (q *QiniuSSL) getDomainGroups() (map[string][]string, error) {
-	domainGroups := make(map[string][]string)
 	domainList, err := q.qiniuClient.GetDomainList()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get domain list: %w", err)
 	}
+	return buildDomainGroups(domainList.Domains), nil
+}
 
-	for _, domain := range domainList.Domains {
-		//type=pan 是对象存储域名，对它调 sslize/httpsconf 会被七牛云以
-		//"非法的域名类型"(code=400093)拒绝。其它 CDN/DCDN 类型都正常支持。
-		if domain.Type == "pan" {
+// buildDomainGroups 只让七牛云支持配置 HTTPS 的域名进入后续流程。
+// pan 域名会被接口以 code=400093 拒绝；test 是控制台标记“无需配置”的系统测试域名。
+// 未知类型也保守跳过，避免七牛云新增不可配置类型时反复发送告警邮件。
+func buildDomainGroups(domains []qiniu.Domain) map[string][]string {
+	domainGroups := make(map[string][]string)
+	for _, domain := range domains {
+		if domain.Type != domainTypeNormal && domain.Type != domainTypeWildcard {
+			log.Printf("跳过无需配置的域名 %s(type=%s)", domain.Name, domain.Type)
 			continue
 		}
 		subject, err := certSubject(domain.Name)
@@ -384,8 +391,7 @@ func (q *QiniuSSL) getDomainGroups() (map[string][]string, error) {
 		}
 		domainGroups[subject] = append(domainGroups[subject], domain.Name)
 	}
-
-	return domainGroups, nil
+	return domainGroups
 }
 
 // certSubject 计算域名应该使用的证书主体名，同时作为分组 key 与 ACME 申请名。
